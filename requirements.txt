@@ -1,0 +1,7 @@
+streamlit
+openai
+pandas
+vnstock
+plotly
+google-generativeai
+python-dotenv

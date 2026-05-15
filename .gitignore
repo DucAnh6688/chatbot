@@ -1,0 +1,22 @@
+# Environment variables
+.env
+.streamlit/secrets.toml
+
+# Chatbot subfolder (not needed for deploy)
+chatbot/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Scratch/test files
+scratch/
