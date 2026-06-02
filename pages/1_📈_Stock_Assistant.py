@@ -1,30 +1,47 @@
 import streamlit as st
-from openai import OpenAI
-import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from vnstock import Quote
-from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
 
-# Load environment variables (local .env fallback)
-load_dotenv()
-
-def get_secret(key, default=""):
-    """Get secret from Streamlit Cloud secrets or .env fallback."""
-    try:
-        return st.secrets[key]
-    except (KeyError, FileNotFoundError):
-        return os.getenv(key, default)
-
-# --- PAGE CONFIGURATION ---
+# --- PAGE CONFIGURATION (MUST be the very first Streamlit command) ---
 st.set_page_config(
     page_title="FLC mất điện - Stock Chatbot",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# --- All other imports AFTER set_page_config ---
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
+import os
+
+# Safe import for vnstock (may fail on some cloud environments)
+try:
+    from vnstock import Quote
+    VNSTOCK_AVAILABLE = True
+except Exception:
+    VNSTOCK_AVAILABLE = False
+
+# Safe import for openai
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except Exception:
+    OPENAI_AVAILABLE = False
+
+# Safe import for dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+def get_secret(key, default=""):
+    """Get secret from Streamlit Cloud secrets or .env fallback."""
+    try:
+        return st.secrets[key]
+    except (KeyError, FileNotFoundError, AttributeError):
+        return os.getenv(key, default)
 
 # --- LOAD CUSTOM CSS ---
 def local_css(file_name):
@@ -106,12 +123,18 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# --- Check vnstock availability ---
+if not VNSTOCK_AVAILABLE:
+    st.error("⚠️ Thư viện `vnstock` chưa được cài đặt hoặc gặp lỗi khi khởi tạo. Vui lòng kiểm tra lại requirements.txt")
+
 # --- FETCH DATA ---
 data_container = st.container()
 
 with data_container:
     if st.button("🔍  Phân tích  " + ticker, use_container_width=True, type="primary"):
-        if len(date_range) != 2:
+        if not VNSTOCK_AVAILABLE:
+            st.error("Không thể phân tích vì thư viện vnstock không khả dụng.")
+        elif len(date_range) != 2:
             st.error("Vui lòng chọn đầy đủ ngày bắt đầu và kết thúc trước khi lấy dữ liệu.")
         else:
             try:
@@ -120,10 +143,10 @@ with data_container:
                     df = quote.history(
                         start=date_range[0].strftime('%Y-%m-%d'),
                         end=date_range[1].strftime('%Y-%m-%d'),
-                        interval='D'
+                        interval='1D'
                     )
 
-                if not df.empty:
+                if df is not None and not df.empty:
                     # --- Calculate Indicators ---
                     df['SMA20'] = df['close'].rolling(window=20).mean()
                     df['SMA50'] = df['close'].rolling(window=50).mean()
@@ -148,32 +171,48 @@ with data_container:
                     pct_change = (price_change / prev['close'] * 100) if prev['close'] != 0 else 0
 
                     # --- Summary Metrics ---
+                    rsi_val = last['RSI']
+                    rsi_display = f"{rsi_val:.1f}" if pd.notna(rsi_val) else "—"
+                    rsi_class = "metric-down" if pd.notna(rsi_val) and rsi_val > 70 else ("metric-up" if pd.notna(rsi_val) and rsi_val < 30 else "")
+                    rsi_status = "Quá mua" if pd.notna(rsi_val) and rsi_val > 70 else ("Quá bán" if pd.notna(rsi_val) and rsi_val < 30 else "Trung tính")
+                    
+                    sma20_display = f"{last['SMA20']:,.1f}" if pd.notna(last['SMA20']) else "—"
+                    sma20_delta_class = "metric-up" if pd.notna(last['SMA20']) and last['close'] > last['SMA20'] else ("metric-down" if pd.notna(last['SMA20']) else "metric-neutral")
+                    sma20_status = "Trên SMA" if pd.notna(last['SMA20']) and last['close'] > last['SMA20'] else ("Dưới SMA" if pd.notna(last['SMA20']) else "Chưa đủ dữ liệu")
+                    
+                    price_delta_class = "metric-up" if price_change >= 0 else "metric-down"
+                    macd_delta_class = "metric-up" if last['MACD'] > last['Signal'] else "metric-down"
+                    macd_status = "Tăng ↑" if last['MACD'] > last['Signal'] else "Giảm ↓"
+
                     st.markdown(f"""
                     <div class="metric-row">
                         <div class="metric-card">
                             <div class="metric-label">Giá hiện tại</div>
                             <div class="metric-value">{last['close']:,.1f}</div>
-                            <div class="metric-delta {'metric-up' if price_change >= 0 else 'metric-down'}">{price_change:+,.1f} ({pct_change:+.2f}%)</div>
+                            <div class="metric-delta {price_delta_class}">{price_change:+,.1f} ({pct_change:+.2f}%)</div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">RSI (14)</div>
-                            <div class="metric-value {'metric-down' if pd.notna(last['RSI']) and last['RSI'] > 70 else 'metric-up' if pd.notna(last['RSI']) and last['RSI'] < 30 else ''}">{last['RSI']:.1f if pd.notna(last['RSI']) else '—'}</div>
-                            <div class="metric-delta metric-neutral">{'Quá mua' if pd.notna(last['RSI']) and last['RSI'] > 70 else 'Quá bán' if pd.notna(last['RSI']) and last['RSI'] < 30 else 'Trung tính'}</div>
+                            <div class="metric-value {rsi_class}">{rsi_display}</div>
+                            <div class="metric-delta metric-neutral">{rsi_status}</div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">SMA 20</div>
-                            <div class="metric-value">{last['SMA20']:,.1f if pd.notna(last['SMA20']) else '—'}</div>
-                            <div class="metric-delta {'metric-up' if pd.notna(last['SMA20']) and last['close'] > last['SMA20'] else 'metric-down' if pd.notna(last['SMA20']) else 'metric-neutral'}">{'Trên SMA' if pd.notna(last['SMA20']) and last['close'] > last['SMA20'] else 'Dưới SMA' if pd.notna(last['SMA20']) else 'Chưa đủ dữ liệu'}</div>
+                            <div class="metric-value">{sma20_display}</div>
+                            <div class="metric-delta {sma20_delta_class}">{sma20_status}</div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">MACD</div>
                             <div class="metric-value">{last['MACD']:.2f}</div>
-                            <div class="metric-delta {'metric-up' if last['MACD'] > last['Signal'] else 'metric-down'}">{'Tăng ↑' if last['MACD'] > last['Signal'] else 'Giảm ↓'}</div>
+                            <div class="metric-delta {macd_delta_class}">{macd_status}</div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
 
                     # --- Chart ---
+                    # Detect the date/time column name
+                    time_col = 'time' if 'time' in df.columns else ('date' if 'date' in df.columns else df.columns[0])
+                    
                     if show_indicators:
                         fig = make_subplots(
                             rows=3, cols=1, shared_xaxes=True,
@@ -185,7 +224,7 @@ with data_container:
                         fig = go.Figure()
 
                     candlestick = go.Candlestick(
-                        x=df['time'], open=df['open'], high=df['high'],
+                        x=df[time_col], open=df['open'], high=df['high'],
                         low=df['low'], close=df['close'], name="Giá",
                         increasing_line_color='#34d399', decreasing_line_color='#f87171',
                         increasing_fillcolor='#34d399', decreasing_fillcolor='#f87171',
@@ -193,23 +232,23 @@ with data_container:
 
                     if show_indicators:
                         fig.add_trace(candlestick, row=1, col=1)
-                        fig.add_trace(go.Scatter(x=df['time'], y=df['SMA20'], name='SMA 20', line=dict(color='#38bdf8', width=1.2)), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=df['time'], y=df['SMA50'], name='SMA 50', line=dict(color='#a78bfa', width=1.2)), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=df[time_col], y=df['SMA20'], name='SMA 20', line=dict(color='#38bdf8', width=1.2)), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=df[time_col], y=df['SMA50'], name='SMA 50', line=dict(color='#a78bfa', width=1.2)), row=1, col=1)
 
                         # Volume as bar chart on main
-                        fig.add_trace(go.Bar(x=df['time'], y=df['volume'], name='Volume', marker_color='rgba(56,189,248,0.15)', yaxis='y'), row=1, col=1)
+                        fig.add_trace(go.Bar(x=df[time_col], y=df['volume'], name='Volume', marker_color='rgba(56,189,248,0.15)', yaxis='y'), row=1, col=1)
 
                         # RSI
-                        fig.add_trace(go.Scatter(x=df['time'], y=df['RSI'], name='RSI', line=dict(color='#818cf8', width=1.5)), row=2, col=1)
+                        fig.add_trace(go.Scatter(x=df[time_col], y=df['RSI'], name='RSI', line=dict(color='#818cf8', width=1.5)), row=2, col=1)
                         fig.add_hline(y=70, line_dash="dash", line_color="rgba(248,113,113,0.5)", line_width=1, row=2, col=1)
                         fig.add_hline(y=30, line_dash="dash", line_color="rgba(52,211,153,0.5)", line_width=1, row=2, col=1)
                         fig.add_hrect(y0=30, y1=70, fillcolor="rgba(129,140,248,0.04)", line_width=0, row=2, col=1)
 
                         # MACD
                         colors = ['#34d399' if v >= 0 else '#f87171' for v in df['Hist']]
-                        fig.add_trace(go.Bar(x=df['time'], y=df['Hist'], name='Histogram', marker_color=colors), row=3, col=1)
-                        fig.add_trace(go.Scatter(x=df['time'], y=df['MACD'], name='MACD', line=dict(color='#38bdf8', width=1.2)), row=3, col=1)
-                        fig.add_trace(go.Scatter(x=df['time'], y=df['Signal'], name='Signal', line=dict(color='#fbbf24', width=1.2)), row=3, col=1)
+                        fig.add_trace(go.Bar(x=df[time_col], y=df['Hist'], name='Histogram', marker_color=colors), row=3, col=1)
+                        fig.add_trace(go.Scatter(x=df[time_col], y=df['MACD'], name='MACD', line=dict(color='#38bdf8', width=1.2)), row=3, col=1)
+                        fig.add_trace(go.Scatter(x=df[time_col], y=df['Signal'], name='Signal', line=dict(color='#fbbf24', width=1.2)), row=3, col=1)
                     else:
                         fig.add_trace(candlestick)
 
@@ -238,8 +277,10 @@ with data_container:
                     st.markdown("### 🤖 Nhận định từ AI")
                     if not api_key:
                         st.warning("Vui lòng nhập API Key ở thanh bên để nhận phân tích từ AI.")
+                    elif not OPENAI_AVAILABLE:
+                        st.warning("Thư viện OpenAI chưa được cài đặt.")
                     else:
-                        macd_status = (
+                        macd_analysis = (
                             "Cắt lên (Tăng)" if last['MACD'] > last['Signal'] and prev['MACD'] <= prev['Signal']
                             else "Cắt xuống (Giảm)" if last['MACD'] < last['Signal'] and prev['MACD'] >= prev['Signal']
                             else "Duy trì xu hướng"
@@ -256,7 +297,7 @@ Phân tích kỹ thuật cho mã {ticker}:
 - SMA 50: {sma50_text}
 - RSI (14): {rsi_text}
 - MACD: {last['MACD']:.2f}, Signal: {last['Signal']:.2f}
-- Trạng thái MACD: {macd_status}
+- Trạng thái MACD: {macd_analysis}
 
 Dựa trên các chỉ số này, hãy đưa ra nhận định ngắn gọn về xu hướng và gợi ý (Mua/Bán/Theo dõi). Trả lời chuyên nghiệp bằng tiếng Việt.
 """
@@ -317,6 +358,8 @@ if prompt := st.chat_input("Hỏi thêm về cổ phiếu..."):
 
     if not api_key:
         st.warning("Vui lòng nhập API Key để tiếp tục.")
+    elif not OPENAI_AVAILABLE:
+        st.warning("Thư viện OpenAI chưa được cài đặt.")
     else:
         try:
             client = OpenAI(api_key=api_key, base_url=base_url)
